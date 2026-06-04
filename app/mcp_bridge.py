@@ -62,18 +62,18 @@ class PlaywrightBridge:
     """Manages a Playwright browser instance and provides MCP-style tool calls."""
 
     def __init__(self):
-        self._playwright  = None   # the playwright instance
+        self._playwright  = None
         self._browser     = None
         self._context     = None
         self._page        = None
-        self._headless    = True   # default: headless
+        self._headless    = False   # always visible — live preview in UI
         self._timeout     = 30000
         self._on_event    = None
-        self._starting    = False  # simple flag instead of asyncio.Lock
-        self._start_error = ""     # last error message for diagnostics
+        self._starting    = False
+        self._start_error = ""
 
-    async def start(self, headless: bool = True, timeout: int = 30000):
-        """Start Playwright Chromium. Safe to call from inside any async event loop."""
+    async def start(self, headless: bool = False, timeout: int = 30000):
+        """Start Playwright Chromium in VISIBLE mode so user can see what's happening."""
         import traceback as _tb
 
         if self._browser is not None:
@@ -233,13 +233,62 @@ class PlaywrightBridge:
     async def ensure_page(self):
         """Make sure browser + page are available; start if needed."""
         if self._browser is None:
-            await self.start(self._headless, self._timeout)
+            await self.start(False, self._timeout)   # always visible
         if self._page is None or self._page.is_closed():
             self._page = await self._context.new_page()
             self._page.set_default_timeout(self._timeout)
 
     # ────────────────────────────────────────────────
-    # TOOL: navigate
+    # LIVE PREVIEW — auto-screenshot after every page action
+    # Sends to the right-panel browser preview, NOT injected into chat.
+    # ────────────────────────────────────────────────
+    async def _live_preview(self):
+        """Capture a screenshot and emit it as live_preview for the browser panel."""
+        try:
+            if self._page and not self._page.is_closed():
+                ss_bytes = await self._page.screenshot(full_page=False, timeout=5000)
+                ss_path  = save_screenshot(ss_bytes, "live")
+                ss_url   = get_file_url(ss_path)
+                await self._emit("live_preview", {
+                    "url":   self._page.url,
+                    "title": await self._page.title(),
+                    "screenshot": ss_url,
+                })
+        except Exception:
+            pass   # preview is best-effort, never block the main flow
+
+    # ────────────────────────────────────────────────
+    # BLOCKING DETECTION
+    # ────────────────────────────────────────────────
+    _BLOCK_SIGNALS = [
+        "access denied", "403 forbidden", "just a moment", "captcha",
+        "cloudflare", "bot detected", "automated access", "unusual traffic",
+        "verify you are human", "security check", "ddos protection",
+        "please verify", "are you a robot", "rate limited", "too many requests",
+        "enable javascript", "blocked", "robot or human",
+    ]
+
+    async def _check_blocked(self) -> tuple[bool, str]:
+        """Return (is_blocked, reason_string)."""
+        try:
+            title = (await self._page.title()).lower()
+            for sig in self._BLOCK_SIGNALS:
+                if sig in title:
+                    return True, await self._page.title()
+            # Check first 800 chars of body text
+            try:
+                body = (await self._page.inner_text("body", timeout=2000)).lower()[:800]
+                for sig in self._BLOCK_SIGNALS:
+                    if sig in body:
+                        return True, sig.title()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return False, ""
+
+    # ────────────────────────────────────────────────
+    # TOOL: navigate  (with blocking detection + live preview)
     # ────────────────────────────────────────────────
     async def navigate(self, url: str) -> dict:
         await self.ensure_page()
@@ -255,8 +304,8 @@ class PlaywrightBridge:
             if url.startswith("https://") and any(e in err_str for e in ("ERR_NAME_NOT_RESOLVED", "ERR_CONNECTION", "ERR_CERT")):
                 try:
                     await self._page.goto(url.replace("https://", "http://", 1), wait_until="domcontentloaded", timeout=20000)
-                except Exception as e2:
-                    return {"success": False, "error": f"Navigation failed: {err_str}"}
+                except Exception:
+                    return {"success": False, "error": f"Could not reach {url}. The site may be down or unreachable."}
             else:
                 return {"success": False, "error": f"Navigation failed: {err_str}"}
 
@@ -393,6 +442,7 @@ class PlaywrightBridge:
         except Exception as e:
             result = {"success": False, "error": str(e)}
 
+        await self._live_preview()   # update right panel after click
         await self._emit("tool_result", {"tool": "click", "result": result})
         return result
 
@@ -415,6 +465,7 @@ class PlaywrightBridge:
             except Exception as e2:
                 result = {"success": False, "error": f"Could not fill '{selector}': {e2}"}
 
+        await self._live_preview()   # update right panel after fill
         await self._emit("tool_result", {"tool": "fill", "result": result})
         return result
 

@@ -155,9 +155,14 @@ function handleServerMessage(msg) {
       break;
     }
 
-    // screenshot: update the browser panel thumbnail only — NOT injected into chat
+    // live_preview: auto-update the right-panel with every browser action
+    case 'live_preview':
+      updateLivePreview(msg.screenshot, msg.url, msg.title);
+      break;
+
+    // screenshot: explicit screenshot requested by user → show in browser panel
     case 'screenshot':
-      updateBrowserPanelScreenshot(msg.url);
+      updateLivePreview(msg.url, '', '');
       break;
 
     case 'pdf_ready':
@@ -177,26 +182,99 @@ function handleServerMessage(msg) {
   }
 }
 
-// ─── Browser panel screenshot (sidebar only, never injected into chat) ───────
-function updateBrowserPanelScreenshot(url) {
-  latestScreenshotUrl = url;
-  const img   = document.getElementById('live-screenshot');
-  const empty = document.getElementById('screenshot-empty');
-  const label = document.getElementById('screenshot-label');
+// ─── Live Preview Panel ───────────────────────────────────────────
 
-  if (img) {
-    img.src = url + '?t=' + Date.now();
-    img.classList.remove('hidden');
-  }
+let _lastPreviewUrl = '';
+let _minimized = false;
+
+function updateLivePreview(screenshotUrl, pageUrl, pageTitle) {
+  if (!screenshotUrl) return;
+  _lastPreviewUrl = screenshotUrl;
+  const ts = new Date().toLocaleTimeString();
+
+  // Main preview image
+  const img = document.getElementById('live-screenshot');
+  const empty = document.getElementById('lp-empty');
+  const infobar = document.getElementById('lp-infobar');
+  const tsEl  = document.getElementById('screenshot-label');
+  const titleEl = document.getElementById('browser-info-title');
+  const urlEl   = document.getElementById('browser-info-url');
+
+  if (img) { img.src = screenshotUrl + '?t=' + Date.now(); img.classList.remove('hidden'); }
   if (empty) empty.style.display = 'none';
-  if (label) { label.classList.remove('hidden'); label.textContent = new Date().toLocaleTimeString(); }
+  if (infobar) infobar.classList.remove('hidden');
+  if (tsEl)    tsEl.textContent    = ts;
+  if (titleEl) titleEl.textContent = pageTitle || '—';
+  if (urlEl)   urlEl.textContent   = pageUrl   || '—';
+
+  // Pulse the live dot
+  const dot = document.getElementById('live-dot');
+  if (dot) { dot.classList.add('pulsing'); setTimeout(() => dot.classList.remove('pulsing'), 800); }
+
+  // Mini strip (shown when minimized)
+  const miniImg   = document.getElementById('lp-mini-img');
+  const miniTitle = document.getElementById('lp-mini-title');
+  const miniUrl   = document.getElementById('lp-mini-url');
+  if (miniImg)   miniImg.src = screenshotUrl + '?t=' + Date.now();
+  if (miniTitle) miniTitle.textContent = pageTitle || '—';
+  if (miniUrl)   miniUrl.textContent   = (pageUrl || '').replace(/^https?:\/\//, '').slice(0, 40);
+
+  // Keep fullscreen overlay in sync if open
+  const overlay = document.getElementById('preview-overlay');
+  if (overlay && !overlay.classList.contains('hidden')) {
+    const poImg   = document.getElementById('po-img');
+    const poUrl   = document.getElementById('po-url');
+    const poTitle = document.getElementById('po-title');
+    const poTs    = document.getElementById('po-ts');
+    if (poImg)   poImg.src = screenshotUrl + '?t=' + Date.now();
+    if (poUrl)   poUrl.textContent   = pageUrl   || '—';
+    if (poTitle) poTitle.textContent = pageTitle || '—';
+    if (poTs)    poTs.textContent    = ts;
+  }
+
   refreshBrowserStatus();
 }
 
-// Legacy alias kept for browser panel manual screenshot button
-function showBrowserScreenshot(url) { updateBrowserPanelScreenshot(url); }
+function expandPreview() {
+  if (!_lastPreviewUrl) return;
+  const overlay = document.getElementById('preview-overlay');
+  const poImg   = document.getElementById('po-img');
+  const poUrl   = document.getElementById('po-url');
+  const poTitle = document.getElementById('po-title');
+  const urlText = document.getElementById('browser-info-url')?.textContent || '—';
+  const titleText = document.getElementById('browser-info-title')?.textContent || '—';
+  if (poImg)   poImg.src = _lastPreviewUrl + '?t=' + Date.now();
+  if (poUrl)   poUrl.textContent   = urlText;
+  if (poTitle) poTitle.textContent = titleText;
+  overlay?.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
 
-// appendScreenshot is REMOVED — screenshots no longer injected into chat
+function collapsePreview() {
+  document.getElementById('preview-overlay')?.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function toggleMinimize() {
+  _minimized = !_minimized;
+  const area  = document.getElementById('live-preview-area');
+  const mini  = document.getElementById('lp-minimized');
+  const minBtn = document.getElementById('minimize-btn');
+  if (_minimized) {
+    area?.classList.add('hidden');
+    mini?.classList.remove('hidden');
+    if (minBtn) minBtn.textContent = '+';
+  } else {
+    area?.classList.remove('hidden');
+    mini?.classList.add('hidden');
+    if (minBtn) minBtn.textContent = '−';
+  }
+}
+
+// Legacy aliases
+function updateBrowserPanelScreenshot(url) { updateLivePreview(url, '', ''); }
+function showBrowserScreenshot(url) { updateLivePreview(url, '', ''); }
+
 
 // ─── Chat helpers ────────────────────────────────────────────
 function startAssistantMessage() {
@@ -492,22 +570,22 @@ async function refreshBrowserStatus() {
     const data = await resp.json();
 
     const statusEl = document.getElementById('browser-info-status');
-    const urlEl    = document.getElementById('browser-info-url');
-    const titleEl  = document.getElementById('browser-info-title');
     const badge    = document.getElementById('browser-status-badge');
+    const dot      = document.getElementById('live-dot');
 
     if (statusEl) statusEl.textContent = data.running ? '🟢 Running' : '⚫ Stopped';
-    if (urlEl)    urlEl.textContent    = data.url   || 'No page loaded';
-    if (titleEl)  titleEl.textContent  = data.title || '—';
     if (badge)    badge.textContent    = data.running ? '🟢 Running' : '⚫ Stopped';
+    if (dot)      dot.className        = 'live-dot' + (data.running ? ' live-dot-on' : '');
 
-    // Update MCP pill if not busy
     if (!isStreaming) {
-      if (data.running) {
-        setMcpState('ready', 'Ready — browser connected');
-      } else {
-        setMcpState('init', 'Browser not started');
-      }
+      if (data.running) setMcpState('ready', 'Ready — browser running');
+      else              setMcpState('init',  'Browser not started');
+    }
+
+    // Update URL/title if browser is running and we don't have a live preview yet
+    if (data.running && data.url && data.url !== 'about:blank') {
+      const urlEl = document.getElementById('browser-info-url');
+      if (urlEl && urlEl.textContent === 'No page loaded') urlEl.textContent = data.url;
     }
   } catch { /* ignore */ }
 }

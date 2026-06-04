@@ -826,6 +826,278 @@ body {
 .lightbox-close:hover { background: var(--red); color: white; border-color: transparent; }
 
 /* ═══════════════════════════════════════════════════════════
+   LIVE BROWSER PREVIEW PANEL
+═══════════════════════════════════════════════════════════ */
+
+/* Panel header */
+.live-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.lph-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.lph-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+
+/* Live dot — green pulsing when browser active */
+.live-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+  transition: background var(--t-fast);
+}
+
+.live-dot.live-dot-on {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: dot-pulse 2.5s infinite;
+}
+
+.live-dot.pulsing {
+  background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan);
+  animation: live-flash 0.8s ease;
+}
+
+@keyframes live-flash {
+  0%   { transform: scale(1.4); opacity: 1; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+
+.lph-url-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.lph-url {
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.lph-controls {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.lph-btn {
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--t-fast);
+  flex-shrink: 0;
+}
+.lph-btn:hover {
+  background: var(--bg-glass);
+  color: var(--text-1);
+  border-color: var(--border-a);
+}
+
+/* Live preview image area */
+.live-preview-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  padding: 0;
+}
+
+.lp-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--text-3);
+  padding: 20px;
+}
+.lp-empty-icon { font-size: 36px; opacity: 0.4; }
+.lp-empty p    { font-size: 12px; max-width: 200px; }
+.lp-empty-sub  { font-size: 10px; opacity: 0.7; }
+
+.live-screenshot {
+  width: 100%;
+  object-fit: contain;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: block;
+  flex: 1;
+  min-height: 0;
+  transition: opacity var(--t-fast);
+  animation: fadeIn 300ms ease;
+}
+.live-screenshot.hidden { display: none; }
+.live-screenshot:hover  { opacity: 0.93; }
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Page info bar below screenshot */
+.lp-infobar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.lp-infobar.hidden { display: none; }
+.lp-title { font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.lp-ts    { font-size: 10px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; flex-shrink: 0; margin-left: 8px; }
+
+/* Minimized strip */
+.lp-minimized {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  animation: fadeUp 200ms ease;
+}
+.lp-minimized.hidden { display: none; }
+
+.lp-mini-img {
+  width: 56px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.lp-mini-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lp-mini-info span { font-size: 10px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lp-mini-info .mono { color: var(--text-3); font-size: 9px; }
+
+/* Status row at bottom */
+.lp-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 14px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.lp-engine {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--cyan);
+  font-size: 9px;
+}
+
+/* ─── Fullscreen Preview Overlay ─────────────────────────── */
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: hsla(225, 28%, 5%, 0.97);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(12px);
+  animation: fadeIn 200ms ease;
+}
+.preview-overlay.hidden { display: none; }
+
+.po-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.po-url {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.po-close {
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all var(--t-fast);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.po-close:hover { background: var(--red); color: white; border-color: transparent; }
+
+.po-img {
+  flex: 1;
+  min-height: 0;
+  object-fit: contain;
+  width: 100%;
+  cursor: default;
+  padding: 16px;
+}
+
+.po-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.po-footer span { color: var(--text-2); }
+.po-ts { font-family: 'JetBrains Mono', monospace; color: var(--text-3) !important; font-size: 10px; }
+
+/* ═══════════════════════════════════════════════════════════
    RESPONSIVE
 ═══════════════════════════════════════════════════════════ */
 @media (max-width: 860px) {

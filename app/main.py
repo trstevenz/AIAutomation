@@ -240,6 +240,15 @@ async def chat_ws(websocket: WebSocket):
                     "url": result["screenshot"],
                 })
 
+        elif event_type == "live_preview":
+            # Live browser state → right-panel preview (never injected into chat)
+            await manager.send(websocket, {
+                "type":       "live_preview",
+                "url":        data.get("url", ""),
+                "title":      data.get("title", ""),
+                "screenshot": data.get("screenshot", ""),
+            })
+
     bridge.set_event_callback(on_browser_event)
 
     try:

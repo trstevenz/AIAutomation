@@ -240,51 +240,58 @@
       </div>
     </div>
 
-    <!-- ── RIGHT: BROWSER PREVIEW / FILES / BROWSER CONTROL ─ -->
+    <!-- ── RIGHT: BROWSER PREVIEW / FILES ─────────────── -->
     <div class="right-column" id="right-column">
 
-      <!-- Browser Preview (default right panel) -->
+      <!-- Browser Live Preview Panel (always visible, auto-updates) -->
       <div class="right-panel active" id="panel-browser">
-        <div class="right-panel-header">
-          <div class="rph-left">
-            <span class="rph-icon">🌐</span>
-            <div>
-              <div class="rph-title">Browser Preview</div>
-              <div class="rph-url mono" id="browser-info-url">No page loaded</div>
-            </div>
+
+        <!-- Panel header -->
+        <div class="live-panel-header">
+          <div class="lph-status">
+            <span class="live-dot" id="live-dot"></span>
+            <span class="lph-title">Live Browser</span>
           </div>
-          <div class="rph-controls">
-            <button class="rph-btn" onclick="startBrowser()"          title="Start browser">▶</button>
-            <button class="rph-btn" onclick="stopBrowser()"           title="Stop browser">⏹</button>
-            <button class="rph-btn" onclick="refreshBrowserStatus()"  title="Refresh status">↺</button>
+          <div class="lph-url-row">
+            <span class="lph-url mono" id="browser-info-url">No page loaded</span>
+          </div>
+          <div class="lph-controls">
+            <button class="lph-btn" id="expand-btn" onclick="expandPreview()" title="Expand to fullscreen">⛶</button>
+            <button class="lph-btn" id="minimize-btn" onclick="toggleMinimize()" title="Minimize preview">−</button>
           </div>
         </div>
 
-        <!-- Browser status card -->
-        <div class="browser-status-card" id="browser-status-card">
-          <div class="bsc-row">
-            <span class="bsc-label">Status</span>
-            <span id="browser-info-status" class="bsc-value">—</span>
+        <!-- Live preview area (collapses when minimized) -->
+        <div class="live-preview-area" id="live-preview-area">
+          <!-- Empty state -->
+          <div class="lp-empty" id="lp-empty">
+            <div class="lp-empty-icon">🌐</div>
+            <p>Browser preview appears here</p>
+            <p class="lp-empty-sub">Every action updates this view automatically</p>
           </div>
-          <div class="bsc-row">
-            <span class="bsc-label">Page title</span>
-            <span id="browser-info-title" class="bsc-value">—</span>
-          </div>
-          <div class="bsc-row">
-            <span class="bsc-label">Engine</span>
-            <span class="bsc-value accent">Playwright · Chromium</span>
+          <!-- Live screenshot -->
+          <img id="live-screenshot" class="live-screenshot hidden" alt="Live browser view" />
+          <!-- Page info bar below image -->
+          <div class="lp-infobar hidden" id="lp-infobar">
+            <span class="lp-title" id="browser-info-title">—</span>
+            <span class="lp-ts" id="screenshot-label"></span>
           </div>
         </div>
 
-        <!-- Screenshot display area -->
-        <div class="screenshot-area" id="screenshot-area">
-          <div class="screenshot-empty" id="screenshot-empty">
-            <div class="se-icon">📸</div>
-            <p>Screenshots appear here as automation runs</p>
-            <p class="se-hint">The AI takes automatic screenshots after each action so you can see what's happening</p>
+        <!-- Minimized strip (shown when minimized) -->
+        <div class="lp-minimized hidden" id="lp-minimized">
+          <img id="lp-mini-img" class="lp-mini-img" alt="" />
+          <div class="lp-mini-info">
+            <span id="lp-mini-title">—</span>
+            <span id="lp-mini-url" class="mono">—</span>
           </div>
-          <img id="live-screenshot" class="live-screenshot hidden" alt="Browser screenshot" onclick="openLightbox(this.src)" />
-          <div class="screenshot-label hidden" id="screenshot-label"></div>
+          <button class="lph-btn" onclick="toggleMinimize()" title="Expand">+</button>
+        </div>
+
+        <!-- Browser status row -->
+        <div class="lp-status-row">
+          <span id="browser-info-status">⚫ Stopped</span>
+          <span class="lp-engine">Playwright · Chromium</span>
         </div>
       </div>
 
@@ -302,6 +309,19 @@
         </div>
       </div>
 
+    </div>
+  </div>
+
+  <!-- Fullscreen preview overlay -->
+  <div id="preview-overlay" class="preview-overlay hidden" onclick="collapsePreview()">
+    <div class="po-header" onclick="event.stopPropagation()">
+      <span class="po-url mono" id="po-url">—</span>
+      <button class="po-close" onclick="collapsePreview()">✕ Close</button>
+    </div>
+    <img id="po-img" class="po-img" alt="Browser preview" onclick="event.stopPropagation()" />
+    <div class="po-footer" onclick="event.stopPropagation()">
+      <span id="po-title">—</span>
+      <span id="po-ts" class="po-ts"></span>
     </div>
   </div>
 
