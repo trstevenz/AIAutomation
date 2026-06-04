@@ -130,31 +130,34 @@ function handleServerMessage(msg) {
       setActiveTool(null);
       break;
 
+    // tool_status: goes to sidebar status bar ONLY — never injected into chat
     case 'tool_status':
-      appendToolStatus(msg.content);
       if (msg.tool) setActiveTool(msg.tool);
       break;
 
+    // tool_call: sidebar activity log only
     case 'tool_call':
       setActiveTool(msg.tool);
-      const argSummary = Object.entries(msg.args || {}).map(([k, v]) => `${k}=${String(v).slice(0,30)}`).join(', ');
+      const argSummary = msg.args?.detail
+        ? String(msg.args.detail).slice(0, 60)
+        : Object.entries(msg.args || {}).map(([k,v]) => `${k}=${String(v).slice(0,30)}`).join(', ');
       addActivityEntry(msg.tool, argSummary, 'run');
-      updateThinking(`🔧 ${msg.tool}…`);
+      updateThinking(`${msg.tool}…`);
       break;
 
-    case 'tool_result':
-      // Update last activity entry to show result
+    // tool_result: sidebar activity log only, NO screenshot in chat
+    case 'tool_result': {
       const success = msg.result?.success !== false;
-      const resultDetail = msg.result?.url || msg.result?.title || msg.result?.value || (success ? 'OK' : msg.result?.error || 'Error');
-      addActivityEntry(msg.tool, resultDetail, success ? 'ok' : 'err');
-
-      if (msg.result?.screenshot) {
-        showBrowserScreenshot(msg.result.screenshot);
-      }
+      const detail  = msg.result?.detail || msg.result?.url || msg.result?.title
+                   || msg.result?.value  || (success ? 'OK' : msg.result?.error || 'Error');
+      addActivityEntry(msg.tool, detail, success ? 'ok' : 'err');
+      // Screenshots go to browser panel only (handled by 'screenshot' message type below)
       break;
+    }
 
+    // screenshot: update the browser panel thumbnail only — NOT injected into chat
     case 'screenshot':
-      showBrowserScreenshot(msg.url);
+      updateBrowserPanelScreenshot(msg.url);
       break;
 
     case 'pdf_ready':
@@ -165,7 +168,7 @@ function handleServerMessage(msg) {
       appendError(msg.content);
       finalizeMessage();
       setActiveTool(null);
-      setMcpState('ready', 'Ready — browser connected');
+      setMcpState('ready', 'Ready');
       break;
 
     case 'history_cleared':
@@ -174,13 +177,12 @@ function handleServerMessage(msg) {
   }
 }
 
-// ─── Screenshot display ──────────────────────────────────────
-function showBrowserScreenshot(url) {
+// ─── Browser panel screenshot (sidebar only, never injected into chat) ───────
+function updateBrowserPanelScreenshot(url) {
   latestScreenshotUrl = url;
   const img   = document.getElementById('live-screenshot');
   const empty = document.getElementById('screenshot-empty');
   const label = document.getElementById('screenshot-label');
-  const urlEl = document.getElementById('browser-info-url');
 
   if (img) {
     img.src = url + '?t=' + Date.now();
@@ -188,13 +190,13 @@ function showBrowserScreenshot(url) {
   }
   if (empty) empty.style.display = 'none';
   if (label) { label.classList.remove('hidden'); label.textContent = new Date().toLocaleTimeString(); }
-
-  // Also show small screenshot in chat
-  if (currentAssistantBubble) {
-    appendScreenshot(url);
-  }
   refreshBrowserStatus();
 }
+
+// Legacy alias kept for browser panel manual screenshot button
+function showBrowserScreenshot(url) { updateBrowserPanelScreenshot(url); }
+
+// appendScreenshot is REMOVED — screenshots no longer injected into chat
 
 // ─── Chat helpers ────────────────────────────────────────────
 function startAssistantMessage() {

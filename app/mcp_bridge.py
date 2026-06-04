@@ -113,17 +113,60 @@ class PlaywrightBridge:
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
                     "--disable-extensions",
+                    "--disable-blink-features=AutomationControlled",  # key stealth flag
+                    "--disable-infobars",
+                    "--window-size=1280,900",
                 ],
             }
             if proxy:
                 launch_args["proxy"] = proxy
 
             self._browser = await self._playwright.chromium.launch(**launch_args)
+
+            # Stealth context: realistic fingerprinting to avoid bot-detection
             self._context = await self._browser.new_context(
                 viewport={"width": 1280, "height": 900},
                 accept_downloads=True,
                 ignore_https_errors=True,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                locale="en-US",
+                timezone_id="America/New_York",
+                permissions=["geolocation"],
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
             )
+            # Override automation-detection fingerprints on every page
+            await self._context.add_init_script("""
+                // Hide webdriver flag
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+                // Add a realistic chrome object
+                window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+
+                // Fake realistic plugin list
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [
+                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+                    ]
+                });
+
+                // Realistic language
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+                // Permissions API — return granted for notifications
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (params) =>
+                    params.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : originalQuery(params);
+            """)
             self._page = await self._context.new_page()
             self._page.set_default_timeout(timeout)
 

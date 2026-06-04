@@ -203,23 +203,38 @@ async def chat_ws(websocket: WebSocket):
 
     # Set up bridge event callbacks
     async def on_browser_event(event_type: str, data: dict):
+        """
+        Route browser events to the SIDEBAR (activity log / browser panel) only.
+        NEVER inject tool progress into the main chat message stream — that would be messy.
+        The AI's final natural-language reply in the chat is the only user-facing output.
+        """
         if event_type == "tool_start":
             tool   = data.get("tool", "")
-            detail = ""
-            if "url" in data:
-                detail = f" → {data['url']}"
-            elif "selector" in data:
-                detail = f" → {data['selector']}"
+            detail = data.get("url") or data.get("selector") or ""
+            # → sidebar activity log only
             await manager.send(websocket, {
-                "type": "tool_status",
+                "type": "tool_call",
                 "tool": tool,
-                "content": f"🔧 **{tool}**{detail}",
+                "args": {"detail": detail},
             })
+
         elif event_type == "tool_result":
-            result = data.get("result", {})
-            # Only send screenshot to chat when the screenshot tool is explicitly called
-            # navigate/click no longer auto-take screenshots
-            if "screenshot" in result and data.get("tool") == "screenshot":
+            result  = data.get("result", {})
+            tool    = data.get("tool", "")
+            success = result.get("success", True)
+            detail  = (result.get("url") or result.get("title") or
+                       result.get("value") or ("OK" if success else result.get("error", "Error")))
+            # → sidebar activity log only
+            await manager.send(websocket, {
+                "type": "tool_result",
+                "tool": tool,
+                "result": {
+                    "success": success,
+                    "detail": str(detail)[:120],
+                },
+            })
+            # Screenshots: update the browser panel, NOT injected into chat
+            if "screenshot" in result and tool == "screenshot":
                 await manager.send(websocket, {
                     "type": "screenshot",
                     "url": result["screenshot"],
