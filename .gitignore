@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment — never commit this (huge, machine-specific)
+venv/
+env/
+.env/
+ENV/
+
+# Environment variables & secrets
+.env
+*.env
+
+# Settings file contains API keys — keep template, ignore real settings
+data/settings.json
+
+# Downloaded files & screenshots (generated at runtime)
+data/downloads/
+data/screenshots/
+
+# Playwright browser binaries (downloaded separately)
+ms-playwright/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temp / test files
+test_*.py
+*.tmp
+scratch/

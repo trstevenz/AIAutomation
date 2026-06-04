@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Web Automation Chat</title>
+  <meta name="description" content="AI-powered web automation chat — automate forms, scrape PDFs, and more with natural language instructions." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════════════════
+       SETTINGS PANEL (slide-out)
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="settings-overlay" class="settings-overlay" onclick="closeSettings()"></div>
+  <aside id="settings-panel" class="settings-panel" aria-label="Settings">
+    <div class="settings-header">
+      <h2>⚙️ Settings</h2>
+      <button id="close-settings-btn" class="icon-btn" onclick="closeSettings()" aria-label="Close settings">✕</button>
+    </div>
+    <div class="settings-body">
+
+      <section class="settings-section">
+        <h3>🤖 AI Provider</h3>
+        <div class="provider-tabs" id="provider-tabs">
+          <button class="provider-tab active" data-provider="openai"      onclick="switchProvider('openai')">OpenAI</button>
+          <button class="provider-tab"        data-provider="claude"      onclick="switchProvider('claude')">Claude</button>
+          <button class="provider-tab"        data-provider="gemini"      onclick="switchProvider('gemini')">Gemini</button>
+          <button class="provider-tab"        data-provider="openrouter"  onclick="switchProvider('openrouter')">OpenRouter</button>
+          <button class="provider-tab"        data-provider="local"       onclick="switchProvider('local')">Local AI</button>
+        </div>
+
+        <div id="config-openai" class="provider-config">
+          <label>API Key</label>
+          <input type="password" id="openai-key" class="settings-input" placeholder="sk-..." autocomplete="off" />
+          <label>Model</label>
+          <select id="openai-model" class="settings-select">
+            <option value="gpt-4o">gpt-4o</option>
+            <option value="gpt-4o-mini">gpt-4o-mini</option>
+            <option value="gpt-4-turbo">gpt-4-turbo</option>
+            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+          </select>
+          <label>Base URL</label>
+          <input type="text" id="openai-base-url" class="settings-input" value="https://api.openai.com/v1" />
+        </div>
+
+        <div id="config-claude" class="provider-config hidden">
+          <label>API Key</label>
+          <input type="password" id="claude-key" class="settings-input" placeholder="sk-ant-..." autocomplete="off" />
+          <label>Model</label>
+          <select id="claude-model" class="settings-select">
+            <option value="claude-opus-4-5">claude-opus-4-5</option>
+            <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+            <option value="claude-haiku-3-5">claude-haiku-3-5</option>
+          </select>
+        </div>
+
+        <div id="config-gemini" class="provider-config hidden">
+          <label>API Key</label>
+          <input type="password" id="gemini-key" class="settings-input" placeholder="AIza..." autocomplete="off" />
+          <label>Model</label>
+          <select id="gemini-model" class="settings-select">
+            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+          </select>
+        </div>
+
+        <div id="config-openrouter" class="provider-config hidden">
+          <label>API Key</label>
+          <input type="password" id="openrouter-key" class="settings-input" placeholder="sk-or-..." autocomplete="off" />
+          <label>Model</label>
+          <input type="text" id="openrouter-model" class="settings-input" placeholder="openai/gpt-4o" value="openai/gpt-4o" />
+          <label>Base URL</label>
+          <input type="text" id="openrouter-base-url" class="settings-input" value="https://openrouter.ai/api/v1" />
+          <div class="toggle-row" style="margin-top:6px">
+            <label for="openrouter-reasoning">Extended Reasoning <span style="font-size:10px;color:var(--cyan);font-weight:600">(deepseek, gemma, etc.)</span></label>
+            <label class="toggle">
+              <input type="checkbox" id="openrouter-reasoning" checked />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p class="settings-hint">Enable for models that support step-by-step thinking (free tier compatible).</p>
+        </div>
+
+
+        <div id="config-local" class="provider-config hidden">
+          <p class="settings-hint">Works with Ollama, LM Studio, or any OpenAI-compatible local server.</p>
+          <label>Base URL</label>
+          <input type="text" id="local-base-url" class="settings-input" placeholder="http://localhost:11434/v1" value="http://localhost:11434/v1" />
+          <label>Model Name</label>
+          <input type="text" id="local-model" class="settings-input" placeholder="llama3, mistral, phi3…" value="llama3" />
+          <label>API Key (if required)</label>
+          <input type="text" id="local-key" class="settings-input" placeholder="ollama" value="ollama" />
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>🌐 Playwright Browser</h3>
+        <div class="toggle-row">
+          <label for="headless-toggle">Run headless (invisible)</label>
+          <label class="toggle">
+            <input type="checkbox" id="headless-toggle" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <label>Action timeout (ms)</label>
+        <input type="number" id="browser-timeout" class="settings-input" value="30000" min="5000" max="120000" />
+        <div class="browser-status-row">
+          <span id="browser-status-badge" class="status-badge">⚫ Unknown</span>
+          <button class="btn-secondary small" onclick="restartBrowser()">↺ Restart Browser</button>
+        </div>
+      </section>
+
+      <div class="settings-actions">
+        <button id="save-settings-btn" class="btn-primary" onclick="saveSettings()">💾 Save Settings</button>
+        <span id="settings-save-status" class="save-status"></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ══════════════════════════════════════════════════════════
+       TOP STATUS BAR — always visible, shows MCP + AI status
+  ═══════════════════════════════════════════════════════════════ -->
+  <header class="topbar" id="topbar">
+    <div class="topbar-brand">
+      <div class="brand-icon-sm">🤖</div>
+      <span class="topbar-title">AI Automation Chat</span>
+    </div>
+
+    <!-- MCP STATUS — centrepiece of the topbar -->
+    <div class="mcp-status-group">
+      <!-- Playwright MCP -->
+      <div class="mcp-pill" id="mcp-pill" title="Playwright MCP — browser automation engine">
+        <div class="mcp-dot" id="mcp-dot"></div>
+        <span class="mcp-icon">🎭</span>
+        <div class="mcp-text">
+          <span class="mcp-label">Playwright MCP</span>
+          <span class="mcp-state" id="mcp-state">Initialising…</span>
+        </div>
+        <div class="mcp-tools-badge" id="mcp-tools-badge" title="Available browser tools">20 tools</div>
+      </div>
+
+      <!-- Active tool flash (shows during automation) -->
+      <div class="active-tool-flash hidden" id="active-tool-flash">
+        <span class="tool-flash-spinner"></span>
+        <span id="active-tool-name">navigate</span>
+      </div>
+    </div>
+
+    <!-- Right controls -->
+    <div class="topbar-right">
+      <div class="ai-provider-pill" id="ai-provider-pill">
+        <span class="ai-dot"></span>
+        <span id="ai-provider-name">OpenAI</span>
+      </div>
+      <button class="topbar-btn" onclick="showPanel('files')"   title="Files">📁</button>
+      <button class="topbar-btn" onclick="showPanel('browser')" title="Browser">🌐</button>
+      <button class="topbar-btn" onclick="clearChat()"          title="New chat">✨</button>
+      <button class="topbar-btn" onclick="openSettings()"       title="Settings">⚙️</button>
+    </div>
+  </header>
+
+  <!-- ══════════════════════════════════════════════════════════
+       MAIN LAYOUT
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="app-shell">
+
+    <!-- ── LEFT: CHAT ─────────────────────────────────────── -->
+    <div class="chat-column" id="panel-chat">
+
+      <!-- Messages -->
+      <div class="chat-messages" id="chat-messages" role="log" aria-live="polite">
+        <div class="welcome-card" id="welcome-card">
+          <div class="welcome-icon">🎭</div>
+          <h2>Playwright MCP Ready</h2>
+          <p>The browser automation engine is connected. Just tell me what to do — I'll use Playwright behind the scenes to navigate, fill forms, scrape data and grab PDFs.</p>
+          <div class="mcp-tool-chips">
+            <span class="tool-chip">🔗 navigate</span>
+            <span class="tool-chip">🖱 click</span>
+            <span class="tool-chip">⌨️ fill form</span>
+            <span class="tool-chip">📤 submit</span>
+            <span class="tool-chip">📄 find PDFs</span>
+            <span class="tool-chip">⬇️ download PDF</span>
+            <span class="tool-chip">🖨 print to PDF</span>
+            <span class="tool-chip">📸 screenshot</span>
+            <span class="tool-chip">📋 get text</span>
+            <span class="tool-chip">🔍 find links</span>
+          </div>
+          <div class="example-prompts">
+            <button class="example-prompt" onclick="sendExample(this)">Go to google.com and search for "Playwright automation"</button>
+            <button class="example-prompt" onclick="sendExample(this)">Navigate to httpbin.org/forms/post, fill all fields and submit</button>
+            <button class="example-prompt" onclick="sendExample(this)">Find and download all PDFs from https://www.w3.org/TR/</button>
+            <button class="example-prompt" onclick="sendExample(this)">Take a screenshot of https://example.com and save it</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity Log (live MCP tool calls) -->
+      <div class="activity-log" id="activity-log">
+        <div class="activity-log-header">
+          <span class="activity-log-title">🔧 MCP Activity Log</span>
+          <button class="activity-clear-btn" onclick="clearActivityLog()" title="Clear log">✕</button>
+        </div>
+        <div class="activity-log-body" id="activity-log-body">
+          <div class="activity-empty" id="activity-empty">No automation activity yet. Send a task to start.</div>
+        </div>
+      </div>
+
+      <!-- Thinking bar -->
+      <div id="thinking-bar" class="thinking-bar hidden">
+        <div class="thinking-dots"><span></span><span></span><span></span></div>
+        <span id="thinking-label" class="thinking-label">Thinking…</span>
+      </div>
+
+      <!-- Input -->
+      <div class="chat-input-area">
+        <div class="input-container">
+          <textarea
+            id="chat-input"
+            class="chat-textarea"
+            placeholder="Describe a web automation task… e.g. 'Go to example.com and take a screenshot'"
+            rows="1"
+            aria-label="Chat input"
+            onkeydown="handleKeyDown(event)"
+            oninput="autoResize(this)"
+          ></textarea>
+          <button id="send-btn" class="send-btn" onclick="sendMessage()" aria-label="Send">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+        <p class="input-hint"><kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> new line</p>
+      </div>
+    </div>
+
+    <!-- ── RIGHT: BROWSER PREVIEW / FILES / BROWSER CONTROL ─ -->
+    <div class="right-column" id="right-column">
+
+      <!-- Browser Preview (default right panel) -->
+      <div class="right-panel active" id="panel-browser">
+        <div class="right-panel-header">
+          <div class="rph-left">
+            <span class="rph-icon">🌐</span>
+            <div>
+              <div class="rph-title">Browser Preview</div>
+              <div class="rph-url mono" id="browser-info-url">No page loaded</div>
+            </div>
+          </div>
+          <div class="rph-controls">
+            <button class="rph-btn" onclick="startBrowser()"          title="Start browser">▶</button>
+            <button class="rph-btn" onclick="stopBrowser()"           title="Stop browser">⏹</button>
+            <button class="rph-btn" onclick="refreshBrowserStatus()"  title="Refresh status">↺</button>
+          </div>
+        </div>
+
+        <!-- Browser status card -->
+        <div class="browser-status-card" id="browser-status-card">
+          <div class="bsc-row">
+            <span class="bsc-label">Status</span>
+            <span id="browser-info-status" class="bsc-value">—</span>
+          </div>
+          <div class="bsc-row">
+            <span class="bsc-label">Page title</span>
+            <span id="browser-info-title" class="bsc-value">—</span>
+          </div>
+          <div class="bsc-row">
+            <span class="bsc-label">Engine</span>
+            <span class="bsc-value accent">Playwright · Chromium</span>
+          </div>
+        </div>
+
+        <!-- Screenshot display area -->
+        <div class="screenshot-area" id="screenshot-area">
+          <div class="screenshot-empty" id="screenshot-empty">
+            <div class="se-icon">📸</div>
+            <p>Screenshots appear here as automation runs</p>
+            <p class="se-hint">The AI takes automatic screenshots after each action so you can see what's happening</p>
+          </div>
+          <img id="live-screenshot" class="live-screenshot hidden" alt="Browser screenshot" onclick="openLightbox(this.src)" />
+          <div class="screenshot-label hidden" id="screenshot-label"></div>
+        </div>
+      </div>
+
+      <!-- Files Panel -->
+      <div class="right-panel" id="panel-files">
+        <div class="right-panel-header">
+          <div class="rph-left">
+            <span class="rph-icon">📁</span>
+            <div><div class="rph-title">Downloaded Files</div><div class="rph-url">PDFs &amp; Screenshots</div></div>
+          </div>
+          <button class="rph-btn" onclick="refreshFiles()" title="Refresh">↺</button>
+        </div>
+        <div id="files-grid" class="files-grid">
+          <div class="files-empty">No files yet. Automation tasks will save files here.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="lightbox hidden" onclick="closeLightbox()">
+    <img id="lightbox-img" class="lightbox-img" alt="Screenshot" />
+    <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
