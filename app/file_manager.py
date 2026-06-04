@@ -12,11 +12,14 @@ def ensure_dirs():
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_screenshot(image_bytes: bytes, prefix: str = "screenshot") -> str:
+def save_screenshot(image_bytes: bytes, prefix: str = "screenshot", ext: str = "png") -> str:
     ensure_dirs()
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{prefix}_{ts}.png"
-    path = SCREENSHOT_DIR / filename
+    # For live previews, always overwrite the same file so disk doesn't fill up
+    if prefix == "live":
+        path = SCREENSHOT_DIR / f"live.{ext}"
+    else:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:20]
+        path = SCREENSHOT_DIR / f"{prefix}_{ts}.{ext}"
     with open(path, "wb") as f:
         f.write(image_bytes)
     return str(path)

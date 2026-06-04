@@ -339,7 +339,12 @@ async def chat_ws(websocket: WebSocket):
                         "filename": result.get("filename", "document.pdf"),
                     })
 
-            # Agentic loop: run AI -> tool calls -> AI again
+            # ─────────────────────────────────────────────────────────────
+            # Agentic loop: AI → tool calls → AI again, until no more tools
+            # ─────────────────────────────────────────────────────────────
+            last_assistant_text = ""
+            ran_tools = False
+
             for _round in range(max_tool_rounds):
                 tool_results_this_turn = []
                 ai_response_parts = []
@@ -354,10 +359,11 @@ async def chat_ws(websocket: WebSocket):
 
                 assistant_text = "".join(ai_response_parts)
 
-                # Build assistant message for history
                 if tool_results_this_turn:
+                    ran_tools = True
+                    last_assistant_text = assistant_text
+                    # Save assistant message + tool results to history
                     asst_msg = {"role": "assistant", "content": assistant_text or " "}
-                    # Preserve reasoning_details for OpenRouter multi-turn continuity
                     rd = getattr(stream_response, '_last_reasoning_details', None)
                     if rd:
                         asst_msg["reasoning_details"] = rd
@@ -370,9 +376,34 @@ async def chat_ws(websocket: WebSocket):
                         })
                     # Continue the loop so AI can process tool results
                     continue
+
                 else:
-                    # No tool calls — AI is done
-                    asst_msg = {"role": "assistant", "content": assistant_text}
+                    # No tool calls this round
+                    if not assistant_text.strip() and ran_tools:
+                        # AI executed tools but returned no final text — force a summary
+                        history.append({"role": "assistant", "content": " "})
+                        history.append({
+                            "role": "user",
+                            "content": (
+                                "[System: The browser task just completed. "
+                                "Give the user a short natural language summary of what happened "
+                                "and the result. Be specific about URLs visited, data found, "
+                                "or actions taken. Do NOT use technical jargon.]"
+                            )
+                        })
+                        tool_results_this_turn = []
+                        ai_response_parts = []
+                        await stream_response(
+                            messages=history,
+                            settings=settings,
+                            tools=None,       # no tools — force text-only reply
+                            on_chunk=on_chunk,
+                            on_tool_call=None,
+                        )
+                        assistant_text = "".join(ai_response_parts)
+                        history.pop()  # remove injected user message
+
+                    asst_msg = {"role": "assistant", "content": assistant_text or " "}
                     rd = getattr(stream_response, '_last_reasoning_details', None)
                     if rd:
                         asst_msg["reasoning_details"] = rd

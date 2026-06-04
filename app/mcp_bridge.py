@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.file_manager import save_screenshot, save_pdf, get_file_url
+import time as _time_module
 
 # Try to import playwright; degrade gracefully if not installed yet
 try:
@@ -243,19 +244,35 @@ class PlaywrightBridge:
     # Sends to the right-panel browser preview, NOT injected into chat.
     # ────────────────────────────────────────────────
     async def _live_preview(self):
-        """Capture a screenshot and emit it as live_preview for the browser panel."""
+        """
+        Fast live preview: JPEG thumbnail, debounced to max 1 per 400ms.
+        Much faster than full PNG — JPEG is 5-10x smaller, encodes faster.
+        """
+        now = _time_module.monotonic()
+        last = getattr(self, '_last_preview_time', 0)
+        if now - last < 0.4:   # debounce: skip if last preview was <400ms ago
+            return
+        self._last_preview_time = now
+
         try:
             if self._page and not self._page.is_closed():
-                ss_bytes = await self._page.screenshot(full_page=False, timeout=5000)
-                ss_path  = save_screenshot(ss_bytes, "live")
-                ss_url   = get_file_url(ss_path)
+                # JPEG at 70% quality — ~10x smaller than PNG, fast to encode + transfer
+                ss_bytes = await self._page.screenshot(
+                    full_page=False,
+                    timeout=4000,
+                    type="jpeg",
+                    quality=70,
+                    clip={"x": 0, "y": 0, "width": 1280, "height": 800}
+                )
+                ss_path = save_screenshot(ss_bytes, "live", ext="jpg")
+                ss_url  = get_file_url(ss_path)
                 await self._emit("live_preview", {
-                    "url":   self._page.url,
-                    "title": await self._page.title(),
+                    "url":        self._page.url,
+                    "title":      await self._page.title(),
                     "screenshot": ss_url,
                 })
         except Exception:
-            pass   # preview is best-effort, never block the main flow
+            pass   # preview is always best-effort
 
     # ────────────────────────────────────────────────
     # BLOCKING DETECTION
@@ -697,6 +714,75 @@ class PlaywrightBridge:
             "title": await self._page.title(),
         }
 
+    # ────────────────────────────────────────────────
+    # TOOL: get_accessibility_snapshot
+    # Token-efficient page understanding — replaces get_html/get_text
+    # Returns compact accessibility tree: ~200-400 tokens vs thousands for HTML
+    # ────────────────────────────────────────────────
+    async def get_accessibility_snapshot(self, interesting_only: bool = True) -> dict:
+        """
+        Returns a compact, token-efficient accessibility tree of the page.
+        Much cheaper than get_html (~200-400 tokens vs thousands).
+        Use this to understand what's on the page before clicking.
+        """
+        await self.ensure_page()
+        await self._emit("tool_start", {"tool": "get_accessibility_snapshot", "selector": "page"})
+
+        try:
+            # Playwright's built-in accessibility snapshot
+            raw = await self._page.accessibility.snapshot(interesting_only=interesting_only)
+
+            if not raw:
+                result = {"success": True, "snapshot": "(empty page or no accessible elements)",
+                          "url": self._page.url, "title": await self._page.title()}
+                await self._emit("tool_result", {"tool": "get_accessibility_snapshot", "result": result})
+                return result
+
+            # Flatten the tree into a compact readable format
+            def _flatten(node, depth=0, lines=None):
+                if lines is None:
+                    lines = []
+                indent = "  " * depth
+                role  = node.get("role", "")
+                name  = node.get("name", "")
+                value = node.get("value", "")
+                desc  = node.get("description", "")
+
+                # Skip invisible / structural noise
+                if role in ("none", "generic", "group", "region", "img") and not name:
+                    for child in node.get("children", []):
+                        _flatten(child, depth, lines)
+                    return lines
+
+                parts = [f"{indent}[{role}]"]
+                if name:  parts.append(f" \"{name}\"")
+                if value: parts.append(f" = {value!r}")
+                if desc and desc != name: parts.append(f" ({desc[:60]})")
+                lines.append("".join(parts))
+
+                for child in node.get("children", []):
+                    _flatten(child, depth + 1, lines)
+                return lines
+
+            lines  = _flatten(raw)
+            # Cap at 120 lines to avoid token explosion on huge pages
+            if len(lines) > 120:
+                lines = lines[:120] + [f"... ({len(lines) - 120} more elements truncated)"]
+
+            snapshot_text = "\n".join(lines)
+            result = {
+                "success": True,
+                "url":      self._page.url,
+                "title":    await self._page.title(),
+                "snapshot": snapshot_text,
+                "elements": len(lines),
+            }
+        except Exception as e:
+            result = {"success": False, "error": f"Accessibility snapshot failed: {e}"}
+
+        await self._emit("tool_result", {"tool": "get_accessibility_snapshot", "result": result})
+        return result
+
     async def call_tool(self, tool_name: str, args: dict) -> dict:
         """Dispatch a tool call by name."""
         tool_map = {
@@ -724,6 +810,9 @@ class PlaywrightBridge:
             "scroll": lambda: self.scroll(args.get("direction", "down"), args.get("amount", 500)),
             "go_back": lambda: self.go_back(),
             "get_page_info": lambda: self.get_page_info(),
+            "get_accessibility_snapshot": lambda: self.get_accessibility_snapshot(
+                args.get("interesting_only", True)
+            ),
         }
         fn = tool_map.get(tool_name)
         if fn:
@@ -963,6 +1052,28 @@ BROWSER_TOOLS = [
             "name": "get_page_info",
             "description": "Get the current page URL and title.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_accessibility_snapshot",
+            "description": (
+                "PREFERRED over get_text/get_html for understanding page structure. "
+                "Returns a compact accessibility tree of the page: roles, labels, "
+                "interactive elements (buttons, inputs, links, headings). "
+                "Very token-efficient (~200-400 tokens vs thousands for full HTML). "
+                "Use this to understand form fields, buttons, and navigation before clicking."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "interesting_only": {
+                        "type": "boolean",
+                        "description": "If true (default), only show interactive and heading elements"
+                    }
+                },
+            },
         },
     },
 ]
