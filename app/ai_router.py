@@ -783,6 +783,14 @@ async def plan_task(
     full_text = "".join(response_chunks)
     parsed = extract_json(full_text)
     
+    if not parsed and full_text.strip():
+        return {
+            "plan": [],
+            "response": full_text.strip(),
+            "done": True,
+            "error": True,
+        }
+
     if not isinstance(parsed, dict):
         parsed = {}
     if "plan" not in parsed or not isinstance(parsed["plan"], list):

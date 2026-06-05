@@ -314,6 +314,11 @@ async def chat_ws(websocket: WebSocket):
                     })
                     break
 
+                if plan_data.get("error"):
+                    final_response = plan_data.get("response", "Unknown error during planning.")
+                    task_done = True
+                    break
+
                 plan = plan_data.get("plan", [])
                 response = plan_data.get("response", "")
                 task_done = plan_data.get("done", False)
