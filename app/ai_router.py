@@ -5,6 +5,7 @@ Features: smart error parsing, auto-retry with backoff on 429/503, friendly mess
 import json
 import asyncio
 import re
+import time
 from typing import Callable
 
 import httpx
@@ -118,6 +119,22 @@ RULES:
 
 4. Keep plans compact and focused (1-4 steps at a time). Prefer using get_accessibility_snapshot to inspect pages.
 """
+
+_last_request_time = 0.0
+_request_lock = asyncio.Lock()
+
+
+async def enforce_cooldown(min_interval: float = 3.0):
+    """Enforce a minimum interval between consecutive API requests to avoid rate limits."""
+    global _last_request_time
+    async with _request_lock:
+        now = time.monotonic()
+        elapsed = now - _last_request_time
+        if elapsed < min_interval:
+            wait_time = min_interval - elapsed
+            await asyncio.sleep(wait_time)
+        _last_request_time = time.monotonic()
+
 
 # ─── Retry config ───────────────────────────────────────────
 MAX_RETRIES    = 3          # max attempts on 429 / 503
@@ -592,6 +609,9 @@ async def stream_response(
     json_mode: bool = False,
 ) -> str:
     """Unified streaming interface for all providers."""
+    # Enforce a 3-second cooldown between consecutive requests to avoid concurrency 429s
+    await enforce_cooldown(3.0)
+
     provider = settings.get("active_provider", "openai")
     pconf    = settings.get("providers", {}).get(provider, {})
 
