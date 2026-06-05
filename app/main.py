@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.settings_manager import load_settings, save_settings
-from app.ai_router import stream_response, SYSTEM_PROMPT
+from app.ai_router import stream_response, SYSTEM_PROMPT, plan_task, summarize_execution
 from app.mcp_bridge import get_bridge, BROWSER_TOOLS
 from app.file_manager import list_downloads, list_screenshots, DOWNLOAD_DIR, SCREENSHOT_DIR, ensure_dirs
 
@@ -282,133 +282,148 @@ async def chat_ws(websocket: WebSocket):
             # Reload settings fresh for each message (in case user updated)
             settings = load_settings()
 
-            ai_response_parts = []
-            tool_results_this_turn = []
-            max_tool_rounds = 15
+            execution_log = []
+            max_rounds = 3
+            round_count = 0
+            replan_max = 2
+            replan_count = 0
+            task_done = False
+            final_response = ""
 
-            async def on_chunk(chunk: str):
-                ai_response_parts.append(chunk)
-                await manager.send(websocket, {"type": "chunk", "content": chunk})
-
-            async def on_tool_call(tool_id: str, tool_name: str, args: dict):
-                # Notify UI
-                await manager.send(websocket, {
-                    "type": "tool_call",
-                    "tool": tool_name,
-                    "args": args,
-                })
-
-                # Ensure browser is started before any tool call
+            while round_count < max_rounds and not task_done:
+                # Get current page state if browser is open
+                page_state = None
+                if bridge._browser and bridge._page and not bridge._page.is_closed():
+                    try:
+                        page_state = await bridge.get_accessibility_snapshot()
+                    except Exception:
+                        pass
+                
+                # Get the plan from AI planner
                 try:
-                    await ensure_browser()
-                except Exception as be:
-                    err_detail = str(be)
-                    result = {"success": False, "error": f"Browser failed to start: {err_detail}"}
+                    plan_data = await plan_task(
+                        messages=history,
+                        settings=settings,
+                        execution_log=execution_log,
+                        page_state=page_state,
+                    )
+                except Exception as pe:
                     await manager.send(websocket, {
                         "type": "chunk",
-                        "content": f"\n\n**Browser could not start:**\n```\n{err_detail}\n```\nTry clicking **▶ Start** in the Browser panel, or restart the server.\n"
+                        "content": f"❌ Error planning task: {str(pe)}"
                     })
-                    await manager.send(websocket, {"type": "tool_result", "tool": tool_name, "result": result})
-                    tool_results_this_turn.append({"tool_call_id": tool_id, "tool_name": tool_name, "result": result})
-                    return
+                    break
 
-                # Execute tool
-                try:
-                    result = await bridge.call_tool(tool_name, args)
-                except Exception as e:
-                    result = {"success": False, "error": str(e)}
+                plan = plan_data.get("plan", [])
+                response = plan_data.get("response", "")
+                task_done = plan_data.get("done", False)
 
-                tool_results_this_turn.append({
-                    "tool_call_id": tool_id,
-                    "tool_name": tool_name,
-                    "result": result,
-                })
+                # If the planner returned a direct response and no steps to execute, we are done
+                if not plan:
+                    if response:
+                        final_response = response
+                    task_done = True
+                    break
 
-                # Send tool result to UI
-                await manager.send(websocket, {
-                    "type": "tool_result",
-                    "tool": tool_name,
-                    "result": result,
-                })
+                # Execute the planned steps
+                plan_failed = False
+                current_step_idx = 0
+                while current_step_idx < len(plan):
+                    step = plan[current_step_idx]
+                    tool_name = step.get("tool")
+                    args = step.get("args", {})
 
-                # Send PDF notification if PDF was created/downloaded
-                if "url" in result and (result.get("url", "").endswith(".pdf") or "downloads" in result.get("url", "")):
+                    # Notify UI of tool starting
                     await manager.send(websocket, {
-                        "type": "pdf_ready",
-                        "url": result["url"],
-                        "filename": result.get("filename", "document.pdf"),
+                        "type": "tool_call",
+                        "tool": tool_name,
+                        "args": args,
                     })
 
-            # ─────────────────────────────────────────────────────────────
-            # Agentic loop: AI → tool calls → AI again, until no more tools
-            # ─────────────────────────────────────────────────────────────
-            last_assistant_text = ""
-            ran_tools = False
+                    # Ensure browser is started before execution
+                    try:
+                        await ensure_browser()
+                    except Exception as be:
+                        err_detail = str(be)
+                        result = {"success": False, "error": f"Browser failed to start: {err_detail}"}
+                        await manager.send(websocket, {
+                            "type": "chunk",
+                            "content": f"\n\n**Browser could not start:**\n```\n{err_detail}\n```\nTry restarting the server.\n"
+                        })
+                        await manager.send(websocket, {"type": "tool_result", "tool": tool_name, "result": result})
+                        execution_log.append({"step": step, "result": result})
+                        plan_failed = True
+                        break
 
-            for _round in range(max_tool_rounds):
-                tool_results_this_turn = []
-                ai_response_parts = []
+                    # Execute the tool call
+                    try:
+                        result = await bridge.call_tool(tool_name, args)
+                    except Exception as e:
+                        result = {"success": False, "error": str(e)}
 
-                await stream_response(
+                    # Log execution result
+                    execution_log.append({
+                        "step": step,
+                        "result": result,
+                    })
+
+                    # Notify UI of tool completion
+                    await manager.send(websocket, {
+                        "type": "tool_result",
+                        "tool": tool_name,
+                        "result": result,
+                    })
+
+                    # Send PDF notification if PDF was created/downloaded
+                    if "url" in result and (result.get("url", "").endswith(".pdf") or "downloads" in result.get("url", "")):
+                        await manager.send(websocket, {
+                            "type": "pdf_ready",
+                            "url": result["url"],
+                            "filename": result.get("filename", "document.pdf"),
+                        })
+
+                    # Check for step failure / anti-bot block
+                    step_success = result.get("success", True)
+                    step_blocked = result.get("blocked", False)
+                    if not step_success or step_blocked:
+                        plan_failed = True
+                        break
+
+                    current_step_idx += 1
+
+                # If the plan failed, attempt to replan within limits
+                if plan_failed:
+                    if replan_count < replan_max:
+                        replan_count += 1
+                        round_count += 1
+                        continue
+                    else:
+                        break
+
+                round_count += 1
+
+            # Done executing. Now generate the final summary response
+            if final_response:
+                await manager.send(websocket, {"type": "chunk", "content": final_response})
+                history.append({"role": "assistant", "content": final_response})
+            elif execution_log:
+                response_parts = []
+                async def on_summary_chunk(chunk: str):
+                    response_parts.append(chunk)
+                    await manager.send(websocket, {"type": "chunk", "content": chunk})
+
+                await summarize_execution(
                     messages=history,
                     settings=settings,
-                    tools=BROWSER_TOOLS,
-                    on_chunk=on_chunk,
-                    on_tool_call=on_tool_call,
+                    execution_log=execution_log,
+                    on_chunk=on_summary_chunk,
                 )
-
-                assistant_text = "".join(ai_response_parts)
-
-                if tool_results_this_turn:
-                    ran_tools = True
-                    last_assistant_text = assistant_text
-                    # Save assistant message + tool results to history
-                    asst_msg = {"role": "assistant", "content": assistant_text or " "}
-                    rd = getattr(stream_response, '_last_reasoning_details', None)
-                    if rd:
-                        asst_msg["reasoning_details"] = rd
-                    history.append(asst_msg)
-                    for tr in tool_results_this_turn:
-                        history.append({
-                            "role": "tool",
-                            "tool_call_id": tr["tool_call_id"],
-                            "content": json.dumps(tr["result"]),
-                        })
-                    # Continue the loop so AI can process tool results
-                    continue
-
-                else:
-                    # No tool calls this round
-                    if not assistant_text.strip() and ran_tools:
-                        # AI executed tools but returned no final text — force a summary
-                        history.append({"role": "assistant", "content": " "})
-                        history.append({
-                            "role": "user",
-                            "content": (
-                                "[System: The browser task just completed. "
-                                "Give the user a short natural language summary of what happened "
-                                "and the result. Be specific about URLs visited, data found, "
-                                "or actions taken. Do NOT use technical jargon.]"
-                            )
-                        })
-                        tool_results_this_turn = []
-                        ai_response_parts = []
-                        await stream_response(
-                            messages=history,
-                            settings=settings,
-                            tools=None,       # no tools — force text-only reply
-                            on_chunk=on_chunk,
-                            on_tool_call=None,
-                        )
-                        assistant_text = "".join(ai_response_parts)
-                        history.pop()  # remove injected user message
-
-                    asst_msg = {"role": "assistant", "content": assistant_text or " "}
-                    rd = getattr(stream_response, '_last_reasoning_details', None)
-                    if rd:
-                        asst_msg["reasoning_details"] = rd
-                    history.append(asst_msg)
-                    break
+                summary_text = "".join(response_parts)
+                history.append({"role": "assistant", "content": summary_text})
+            else:
+                fallback_msg = "Task completed, but no details are available."
+                await manager.send(websocket, {"type": "chunk", "content": fallback_msg})
+                history.append({"role": "assistant", "content": fallback_msg})
 
             await manager.send(websocket, {"type": "end"})
 

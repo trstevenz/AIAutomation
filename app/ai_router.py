@@ -4,6 +4,7 @@ Features: smart error parsing, auto-retry with backoff on 429/503, friendly mess
 """
 import json
 import asyncio
+import re
 from typing import Callable
 
 import httpx
@@ -55,6 +56,67 @@ WHEN A SITE BLOCKS AUTOMATION (blocked: true in tool result):
 - Never just stop — always have a backup plan.
 
 SCOPE: You ONLY automate web browsers. For anything else, briefly help then redirect to web automation.
+"""
+
+PLANNER_SYSTEM_PROMPT = """
+You are an AI web automation planner. Your job is to analyze the user's request, execution history, and current page state, and decide the next steps.
+
+You must respond with a JSON object. Do not output any other text before or after the JSON.
+
+JSON SCHEMA:
+{
+  "response": "Use this field ONLY if the task is finished/failed, or if the user asked a general question. Provide a natural-language reply here. Otherwise, leave this field empty (\"\").",
+  "plan": [
+    {
+      "tool": "tool_name",
+      "args": { ... }
+    }
+  ],
+  "done": false
+}
+
+RULES:
+1. If the user's prompt is a general knowledge question or greeting (not asking for a browser task):
+   - Set "response" to a brief 1-2 sentence answer, followed by 2-3 bullet points suggesting specific web automation tasks you can perform (e.g. searching, form filling, downloading).
+   - Set "plan" to [].
+   - Set "done" to true.
+
+2. If the user wants to perform a browser/web task:
+   - If the task is not yet started:
+     - Set "plan" to the initial steps (e.g., navigate, fill search, etc.).
+     - Set "response" to "".
+     - Set "done" to false.
+   - If the task is in progress (you will see the execution log and current page state):
+     - If the goal is achieved:
+       - Set "plan" to [].
+       - Set "response" to "Done! [short summary of what was accomplished]".
+       - Set "done" to true.
+     - If the page is blocked (e.g., Cloudflare, CAPTCHA, access denied):
+       - Set "plan" to [].
+       - Set "response" to a message stating the site blocked automation, and list 2-3 alternative websites/options the user might want you to try.
+       - Set "done" to true.
+     - Otherwise, output the next steps in "plan" to continue the task. Set "response" to "" and "done" to false.
+
+3. Available tools are:
+   - navigate (url)
+   - click (selector, text, x, y)
+   - fill (selector, value)
+   - select_option (selector, value)
+   - type_text (selector, text)
+   - get_text (selector)
+   - get_accessibility_snapshot (interesting_only)
+   - wait_for_selector (selector, timeout)
+   - submit_form (selector)
+   - scroll (direction, amount)
+   - go_back ()
+   - screenshot (full_page)
+   - find_links (pattern)
+   - find_pdfs ()
+   - download_pdf (url, filename)
+   - print_to_pdf (filename)
+   - execute_js (script)
+
+4. Keep plans compact and focused (1-4 steps at a time). Prefer using get_accessibility_snapshot to inspect pages.
 """
 
 # ─── Retry config ───────────────────────────────────────────
@@ -148,6 +210,7 @@ async def stream_openai_compatible(
     on_tool_call: Callable = None,
     extra_headers: dict = None,
     use_reasoning: bool = False,   # OpenRouter extended reasoning
+    json_mode: bool = False,
 ) -> tuple:
     """
     Stream from any OpenAI-compatible endpoint.
@@ -183,6 +246,8 @@ async def stream_openai_compatible(
         "stream": True,
         "temperature": 0.7,
     }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -305,6 +370,7 @@ async def stream_claude(
     tools: list = None,
     on_chunk: Callable = None,
     on_tool_call: Callable = None,
+    json_mode: bool = False,
 ) -> str:
     headers = {
         "x-api-key": api_key,
@@ -425,6 +491,7 @@ async def stream_gemini(
     tools: list = None,
     on_chunk: Callable = None,
     on_tool_call: Callable = None,
+    json_mode: bool = False,
 ) -> str:
     contents = []
     system_text = SYSTEM_PROMPT
@@ -448,6 +515,8 @@ async def stream_gemini(
         "systemInstruction": {"parts": [{"text": system_text}]},
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096},
     }
+    if json_mode:
+        payload["generationConfig"]["responseMimeType"] = "application/json"
     if tools:
         decls = []
         for t in tools:
@@ -520,6 +589,7 @@ async def stream_response(
     tools: list = None,
     on_chunk: Callable = None,
     on_tool_call: Callable = None,
+    json_mode: bool = False,
 ) -> str:
     """Unified streaming interface for all providers."""
     provider = settings.get("active_provider", "openai")
@@ -545,6 +615,7 @@ async def stream_response(
                 api_key=pconf.get("api_key", ""),
                 model=pconf.get("model", "claude-opus-4-5"),
                 tools=tools, on_chunk=on_chunk, on_tool_call=on_tool_call,
+                json_mode=json_mode,
             )
 
         elif provider == "gemini":
@@ -553,6 +624,7 @@ async def stream_response(
                 api_key=pconf.get("api_key", ""),
                 model=pconf.get("model", "gemini-2.0-flash"),
                 tools=tools, on_chunk=on_chunk, on_tool_call=on_tool_call,
+                json_mode=json_mode,
             )
 
         elif provider in ("openai", "openrouter", "local"):
@@ -575,6 +647,7 @@ async def stream_response(
                 tools=tools, on_chunk=on_chunk, on_tool_call=on_tool_call,
                 extra_headers=extra,
                 use_reasoning=use_reasoning,
+                json_mode=json_mode,
             )
             # Attach reasoning_details to the last assistant entry so the
             # caller (main.py) can store it in history for multi-turn continuity
@@ -600,3 +673,151 @@ async def stream_response(
         if on_chunk:
             await on_chunk(msg)
         return msg
+
+
+def extract_json(text: str) -> dict:
+    """Robustly extract JSON object from LLM response text."""
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
+    
+    try:
+        return json.loads(text)
+    except Exception:
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except Exception:
+                pass
+        return {}
+
+
+async def plan_task(
+    messages: list,
+    settings: dict,
+    execution_log: list = None,
+    page_state: dict = None,
+) -> dict:
+    """
+    Call the AI planner to get the next step(s).
+    Returns a dict with 'response', 'plan', and 'done'.
+    """
+    history = []
+    for m in messages:
+        if m.get("role") == "system":
+            history.append({"role": "system", "content": PLANNER_SYSTEM_PROMPT})
+        else:
+            history.append(dict(m))
+            
+    if not any(m.get("role") == "system" for m in history):
+        history.insert(0, {"role": "system", "content": PLANNER_SYSTEM_PROMPT})
+        
+    context_parts = []
+    if execution_log:
+        log_lines = []
+        for i, item in enumerate(execution_log):
+            step = item.get("step", {})
+            res = item.get("result", {})
+            success = res.get("success", True)
+            err = res.get("error", "")
+            blocked = res.get("blocked", False)
+            status = "Success"
+            if not success:
+                status = f"Failed: {err}"
+            elif blocked:
+                status = "Blocked by anti-bot protection"
+            log_lines.append(f"- Step {i+1}: {step.get('tool')}({step.get('args', {})}) -> {status}")
+        context_parts.append("Execution History:\n" + "\n".join(log_lines))
+        
+    if page_state:
+        context_parts.append(
+            f"Current Page State:\n"
+            f"- URL: {page_state.get('url', 'about:blank')}\n"
+            f"- Title: {page_state.get('title', '')}\n"
+            f"- Accessibility Snapshot:\n{page_state.get('snapshot', '(empty)')}"
+        )
+        
+    if context_parts:
+        context_msg = "\n\n".join(context_parts)
+        history.append({"role": "user", "content": f"[System Update]\n{context_msg}\n\nProvide your next JSON plan."})
+
+    response_chunks = []
+    async def collect_chunks(chunk: str):
+        response_chunks.append(chunk)
+        
+    await stream_response(
+        messages=history,
+        settings=settings,
+        tools=None,
+        on_chunk=collect_chunks,
+        on_tool_call=None,
+        json_mode=True,
+    )
+    
+    full_text = "".join(response_chunks)
+    parsed = extract_json(full_text)
+    
+    if not isinstance(parsed, dict):
+        parsed = {}
+    if "plan" not in parsed or not isinstance(parsed["plan"], list):
+        parsed["plan"] = []
+    if "response" not in parsed:
+        parsed["response"] = ""
+    if "done" not in parsed:
+        parsed["done"] = bool(parsed["response"] and not parsed["plan"])
+        
+    return parsed
+
+
+async def summarize_execution(
+    messages: list,
+    settings: dict,
+    execution_log: list,
+    on_chunk: Callable,
+) -> str:
+    """
+    Stream a natural language summary of the execution to the user.
+    """
+    history = []
+    for m in messages:
+        if m.get("role") == "system":
+            history.append({"role": "system", "content": (
+                "You are an AI assistant. Summarise the browser task execution results for the user. "
+                "Output ONLY a clean, natural-language summary. Do not output JSON or code blocks unless requested. "
+                "Be brief and friendly. Mention sites visited, actions taken, and the final result."
+            )})
+        else:
+            history.append(dict(m))
+
+    log_lines = []
+    for i, item in enumerate(execution_log):
+        step = item.get("step", {})
+        res = item.get("result", {})
+        success = res.get("success", True)
+        err = res.get("error", "")
+        log_lines.append(f"- Step {i+1}: {step.get('tool')}({step.get('args', {})}) -> {'Success' if success else 'Failed: ' + str(err)}")
+        
+    history.append({
+        "role": "user",
+        "content": (
+            f"[System Update: Execution completed]\n"
+            f"Here is the execution history:\n"
+            f"{'\n'.join(log_lines)}\n\n"
+            f"Please write the final summary for the user now."
+        )
+    })
+
+    return await stream_response(
+        messages=history,
+        settings=settings,
+        tools=None,
+        on_chunk=on_chunk,
+        on_tool_call=None,
+        json_mode=False,
+    )
